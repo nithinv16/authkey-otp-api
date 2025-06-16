@@ -1,40 +1,36 @@
-const express = require("express");
-const fetch = require("node-fetch");
+require('dotenv').config();
+
+const express = require('express');
+const https = require('https');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const AUTHKEY = "904251f34754cedc"; // Replace with your Authkey.io
-const HOOK_SECRET = "v1,whsec_ep8uiciCqtqRBa3DFDE8NaElmLyB8LBnOvZNky0RGXQeW+8WMhp2YCiffMYMLZHGBvcCXcvLFqMizezu"; // Keep this strong
+app.get('/send-otp', async (req, res) => {
+  const { mobile, otp, secret } = req.query;
 
-app.use(express.json());
-
-app.post("/send-otp", async (req, res) => {
-  const secret = req.query.secret;
-  if (secret !== HOOK_SECRET) {
-    return res.status(403).json({ error: "Forbidden" });
+  if (secret !== process.env.HOOK_SECRET) {
+    return res.status(403).json({ error: 'Unauthorized' });
   }
 
-  const { phone } = req.body;
-  if (!phone) return res.status(400).json({ error: "Missing phone number" });
+  const message = `Hello, your OTP is ${otp}`;
+  const authKey = process.env.AUTHKEY;
+  const senderId = 'AUTHKY'; // or your sender ID
+  const countryCode = '91';  // modify if needed
 
-  const otp = Math.floor(100000 + Math.random() * 900000);
-  const message = `Your OTP is ${otp}`;
+  const url = `https://console.authkey.io/request?authkey=${authKey}&mobile=${mobile}&country_code=${countryCode}&sms=${encodeURIComponent(message)}&sender=${senderId}`;
 
-  const url = `https://console.authkey.io/request?authkey=${AUTHKEY}&mobile=${phone}&country_code=91&sms=${encodeURIComponent(message)}&sender=AUTHKY`;
-
-  try {
-    const response = await fetch(url);
-    const result = await response.json();
-    return res.status(200).json({ status: "sent", result });
-  } catch (error) {
-    console.error("Authkey Error:", error);
-    return res.status(500).json({ error: "Failed to send OTP" });
-  }
+  https.get(url, (resp) => {
+    let data = '';
+    resp.on('data', chunk => data += chunk);
+    resp.on('end', () => res.send(data));
+  }).on('error', (err) => {
+    res.status(500).json({ error: err.message });
+  });
 });
-
-app.get("/", (req, res) => res.send("Authkey OTP API running"));
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
+
