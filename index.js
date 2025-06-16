@@ -6,8 +6,10 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// Middleware
+// Middleware to capture raw body for signature verification
+app.use('/send-otp', express.raw({ type: 'application/json' }));
 app.use(express.json());
+
 app.use((req, res, next) => {
   console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
   console.log('Headers:', JSON.stringify(req.headers, null, 2));
@@ -22,7 +24,7 @@ app.get('/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
-// Main SMS hook endpoint - converts POST to GET
+// Main SMS hook endpoint
 app.post('/send-otp', async (req, res) => {
   try {
     // 1. Validate webhook signature (Supabase way)
@@ -34,11 +36,11 @@ app.post('/send-otp', async (req, res) => {
       return res.status(401).json({ error: 'Unauthorized: Missing webhook signature' });
     }
     
-    // Verify the webhook signature
-    const body = JSON.stringify(req.body);
+    // Verify the webhook signature using raw body
+    const body = req.body;
     const expectedSignature = crypto
       .createHmac('sha256', webhookSecret)
-      .update(body)
+      .update(body, 'utf8')
       .digest('hex');
     
     if (signature !== expectedSignature) {
@@ -46,24 +48,27 @@ app.post('/send-otp', async (req, res) => {
       return res.status(401).json({ error: 'Unauthorized: Invalid webhook signature' });
     }
     
-    // 2. Extract data from Supabase POST request
-    const { phone, token, user } = req.body;
+    // 2. Parse the JSON body
+    const data = JSON.parse(body);
     
-    if (!phone || !token) {
-      console.error('Missing required fields:', { phone: !!phone, token: !!token });
-      return res.status(400).json({ error: 'Missing required fields: phone and token' });
+    // Extract phone from the record (Supabase Auth Hook format)
+    const phone = data.record?.phone || data.record?.raw_user_meta_data?.phone;
+    
+    if (!phone) {
+      console.error('Missing phone number in request:', data);
+      return res.status(400).json({ error: 'Missing phone number' });
     }
     
-    console.log('Processing OTP request:', { phone, token, userId: user?.id });
+    console.log('Processing OTP request for phone:', phone);
     
     // 3. Transform to AuthKey GET request
-    const authkeyUrl = 'https://api.authkey.io/request';
+    const authkeyUrl = 'https://control.authkey.io/api/v2/sms/send';
     const authkeyParams = {
       authkey: process.env.AUTHKEY,
       mobile: phone.replace(/[^\d]/g, ''), // Remove non-digits
-      country_code: '91', // Adjust based on your needs
-      sms: `Your OTP is: ${token}. Do not share this with anyone.`,
-      company: 'DukaaOn' // Your company name
+      country_code: '91',
+      sid: '13462', // Your template ID
+      company: 'DukaaOn'
     };
     
     console.log('Sending to AuthKey:', { url: authkeyUrl, params: authkeyParams });
@@ -71,7 +76,7 @@ app.post('/send-otp', async (req, res) => {
     // 4. Make GET request to AuthKey
     const authkeyResponse = await axios.get(authkeyUrl, {
       params: authkeyParams,
-      timeout: 8000 // 8 second timeout
+      timeout: 8000
     });
     
     console.log('AuthKey response:', authkeyResponse.data);
