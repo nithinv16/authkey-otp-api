@@ -1,5 +1,6 @@
 const express = require('express');
 const axios = require('axios');
+const crypto = require('crypto');
 require('dotenv').config();
 
 const app = express();
@@ -24,19 +25,25 @@ app.get('/health', (req, res) => {
 // Main SMS hook endpoint - converts POST to GET
 app.post('/send-otp', async (req, res) => {
   try {
-    // 1. Validate authentication
-    const authHeader = req.headers.authorization;
-    const expectedSecret = process.env.HOOK_SECRET;
+    // 1. Validate webhook signature (Supabase way)
+    const signature = req.headers['x-supabase-signature'];
+    const webhookSecret = process.env.HOOK_SECRET;
     
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      console.error('Missing or invalid Authorization header');
-      return res.status(401).json({ error: 'Unauthorized: Missing Bearer token' });
+    if (!signature) {
+      console.error('Missing webhook signature');
+      return res.status(401).json({ error: 'Unauthorized: Missing webhook signature' });
     }
     
-    const providedSecret = authHeader.substring(7); // Remove 'Bearer '
-    if (providedSecret !== expectedSecret) {
-      console.error('Invalid secret key');
-      return res.status(401).json({ error: 'Unauthorized: Invalid secret' });
+    // Verify the webhook signature
+    const body = JSON.stringify(req.body);
+    const expectedSignature = crypto
+      .createHmac('sha256', webhookSecret)
+      .update(body)
+      .digest('hex');
+    
+    if (signature !== expectedSignature) {
+      console.error('Invalid webhook signature');
+      return res.status(401).json({ error: 'Unauthorized: Invalid webhook signature' });
     }
     
     // 2. Extract data from Supabase POST request
