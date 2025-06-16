@@ -5,12 +5,12 @@ const https = require('https');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.get('/send-otp', async (req, res) => {
+app.post('/send-otp', async (req, res) => {
   const { mobile, otp, secret } = req.query;
 
   console.log("Received secret:", secret);
   console.log("Expected secret:", process.env.HOOK_SECRET);
-  
+
   if (secret !== process.env.HOOK_SECRET) {
     return res.status(403).json({ error: 'Unauthorized' });
   }
