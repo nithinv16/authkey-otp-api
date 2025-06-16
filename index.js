@@ -1,36 +1,36 @@
 require('dotenv').config();
-const express = require('express');
-const https = require('https');
 
+const express = require('express');
+const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const app = express();
+
+app.use(express.json());
+
 const PORT = process.env.PORT || 3000;
 
 app.post('/send-otp', async (req, res) => {
-  const { mobile, otp, secret } = req.query;
+  const { phone, otp, type } = req.body;
+  const receivedSecret = req.headers['secret'];
 
-  console.log("Received secret:", secret);
-  console.log("Expected secret:", process.env.HOOK_SECRET);
-
-  if (secret !== process.env.HOOK_SECRET) {
+  if (receivedSecret !== process.env.HOOK_SECRET) {
     return res.status(403).json({ error: 'Unauthorized' });
   }
 
-  const company = 'dukaaOn-Rider'; // Change this to your actual app name
-  const message = `Use ${otp} as your OTP to access your ${company}, OTP is confidential and valid for 5 mins. This SMS sent by authkey.io`;
-
+  const message = `Use ${otp} as your OTP to access your AppName, OTP is confidential and valid for 5 mins.`;
   const authKey = process.env.AUTHKEY;
   const senderId = 'AUTHKY';
-  const countryCode = '91';
+  const countryCode = '91'; // adjust based on phone if needed
 
-  const url = `https://console.authkey.io/request?authkey=${authKey}&mobile=${mobile}&country_code=${countryCode}&sms=${encodeURIComponent(message)}&sender=${senderId}`;
+  const url = `https://console.authkey.io/request?authkey=${authKey}&mobile=${phone}&country_code=${countryCode}&sms=${encodeURIComponent(message)}&sender=${senderId}`;
 
-  https.get(url, (resp) => {
-    let data = '';
-    resp.on('data', chunk => data += chunk);
-    resp.on('end', () => res.send(data));
-  }).on('error', (err) => {
+  try {
+    const response = await fetch(url);
+    const data = await response.text();
+    res.send(data);
+  } catch (err) {
+    console.error('Error sending OTP:', err);
     res.status(500).json({ error: err.message });
-  });
+  }
 });
 
 app.listen(PORT, () => {
