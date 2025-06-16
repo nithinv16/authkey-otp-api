@@ -1,27 +1,26 @@
 require('dotenv').config();
-
 const express = require('express');
-const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
-const app = express();
+const fetch = require('node-fetch'); // make sure node-fetch@2 is installed
 
-app.use(express.json());
+const app = express();
+app.use(express.json()); // enables parsing JSON body
 
 const PORT = process.env.PORT || 3000;
 
 app.post('/send-otp', async (req, res) => {
-  const { phone, otp, type } = req.body;
-  const receivedSecret = req.headers['secret'];
+  const { mobile, otp } = req.body;
+  const secret = req.headers['authorization'];
 
-  if (receivedSecret !== process.env.HOOK_SECRET) {
+  if (secret !== `Bearer ${process.env.HOOK_SECRET}`) {
     return res.status(403).json({ error: 'Unauthorized' });
   }
 
-  const message = `Use ${otp} as your OTP to access your AppName, OTP is confidential and valid for 5 mins.`;
+  const message = `Use ${otp} as your OTP to access your Company, OTP is confidential and valid for 5 mins.`;
   const authKey = process.env.AUTHKEY;
   const senderId = 'AUTHKY';
-  const countryCode = '91'; // adjust based on phone if needed
+  const countryCode = '91';
 
-  const url = `https://console.authkey.io/request?authkey=${authKey}&mobile=${phone}&country_code=${countryCode}&sms=${encodeURIComponent(message)}&sender=${senderId}`;
+  const url = `https://console.authkey.io/request?authkey=${authKey}&mobile=${mobile}&country_code=${countryCode}&sms=${encodeURIComponent(message)}&sender=${senderId}`;
 
   try {
     const response = await fetch(url);
@@ -29,8 +28,12 @@ app.post('/send-otp', async (req, res) => {
     res.send(data);
   } catch (err) {
     console.error('Error sending OTP:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Failed to send OTP' });
   }
+});
+
+app.get('/', (req, res) => {
+  res.send('AuthKey OTP API running!');
 });
 
 app.listen(PORT, () => {
