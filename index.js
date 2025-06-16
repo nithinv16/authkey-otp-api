@@ -1,79 +1,111 @@
-require('dotenv').config();
 const express = require('express');
-const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
+const axios = require('axios');
+require('dotenv').config();
+
 const app = express();
-
-app.use(express.json());
-
 const PORT = process.env.PORT || 8080;
 
-// POST route to handle Supabase Auth Hook and transform to AuthKey GET
-app.post('/send-otp', async (req, res) => {
-  // Step 1: Verify Supabase secret
-  const secretHeader = req.headers['secret'];
-  const expectedSecret = process.env.HOOK_SECRET;
-
-  if (secretHeader !== expectedSecret) {
-    console.log('❌ Auth failed. Expected:', expectedSecret?.substring(0, 10) + '...', 'Got:', secretHeader?.substring(0, 10) + '...');
-    return res.status(403).json({ error: 'Unauthorized' });
+// Middleware
+app.use(express.json());
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+  console.log('Headers:', JSON.stringify(req.headers, null, 2));
+  if (req.body && Object.keys(req.body).length > 0) {
+    console.log('Body:', JSON.stringify(req.body, null, 2));
   }
-
-  try {
-    // Step 2: Extract data from Supabase POST body
-    const { token, phone, user } = req.body;
-    const mobile = phone?.replace('+', '') || user?.phone?.replace('+', '') || '';
-
-    if (!token || !mobile) {
-      console.log('❌ Missing data. Token:', !!token, 'Mobile:', !!mobile);
-      return res.status(400).json({ error: 'Missing OTP or phone number' });
-    }
-
-    console.log('📱 Processing OTP request for mobile:', mobile.substring(0, 3) + '***');
-
-    // Step 3: Prepare AuthKey message
-    const companyName = 'dukaaOn-Rider';
-    const message = `Use ${token} as your OTP to access your ${companyName}, OTP is confidential and valid for 5 mins This sms sent by authkey.io`;
-
-    // Step 4: Transform POST to GET - Build AuthKey URL
-    const authKey = process.env.AUTHKEY;
-    const senderId = 'AUTHKY';
-    const countryCode = '91'; // Adjust as needed
-
-    const authKeyUrl = `https://console.authkey.io/request?authkey=${authKey}&mobile=${mobile}&country_code=${countryCode}&sms=${encodeURIComponent(message)}&sender=${senderId}`;
-
-    // Step 5: Send GET request to AuthKey
-    console.log('🚀 Sending to AuthKey...');
-    const response = await fetch(authKeyUrl);
-    const result = await response.text();
-
-    console.log('✅ AuthKey response:', result);
-    
-    // Step 6: Return success to Supabase
-    return res.status(200).json({ 
-      success: true, 
-      message: 'OTP sent successfully',
-      authkey_response: result 
-    });
-
-  } catch (error) {
-    console.error('❌ Error sending OTP:', error.message);
-    return res.status(500).json({ 
-      error: 'Failed to send OTP', 
-      details: error.message 
-    });
-  }
+  next();
 });
 
 // Health check endpoint
-app.get('/', (req, res) => {
-  res.json({ 
-    status: 'running',
-    service: 'AuthKey OTP Bridge',
-    description: 'Transforms Supabase POST requests to AuthKey GET requests'
-  });
+app.get('/health', (req, res) => {
+  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+});
+
+// Main SMS hook endpoint - converts POST to GET
+app.post('/send-otp', async (req, res) => {
+  try {
+    // 1. Validate authentication
+    const authHeader = req.headers.authorization;
+    const expectedSecret = process.env.HOOK_SECRET;
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      console.error('Missing or invalid Authorization header');
+      return res.status(401).json({ error: 'Unauthorized: Missing Bearer token' });
+    }
+    
+    const providedSecret = authHeader.substring(7); // Remove 'Bearer '
+    if (providedSecret !== expectedSecret) {
+      console.error('Invalid secret key');
+      return res.status(401).json({ error: 'Unauthorized: Invalid secret' });
+    }
+    
+    // 2. Extract data from Supabase POST request
+    const { phone, token, user } = req.body;
+    
+    if (!phone || !token) {
+      console.error('Missing required fields:', { phone: !!phone, token: !!token });
+      return res.status(400).json({ error: 'Missing required fields: phone and token' });
+    }
+    
+    console.log('Processing OTP request:', { phone, token, userId: user?.id });
+    
+    // 3. Transform to AuthKey GET request
+    const authkeyUrl = 'https://api.authkey.io/request';
+    const authkeyParams = {
+      authkey: process.env.AUTHKEY,
+      mobile: phone.replace(/[^\d]/g, ''), // Remove non-digits
+      country_code: '91', // Adjust based on your needs
+      sms: `Your OTP is: ${token}. Do not share this with anyone.`,
+      company: 'DukaaOn' // Your company name
+    };
+    
+    console.log('Sending to AuthKey:', { url: authkeyUrl, params: authkeyParams });
+    
+    // 4. Make GET request to AuthKey
+    const authkeyResponse = await axios.get(authkeyUrl, {
+      params: authkeyParams,
+      timeout: 8000 // 8 second timeout
+    });
+    
+    console.log('AuthKey response:', authkeyResponse.data);
+    
+    // 5. Return success response to Supabase
+    res.json({
+      success: true,
+      message: 'OTP sent successfully',
+      authkey_response: authkeyResponse.data,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('Error processing OTP request:', error.message);
+    
+    if (error.code === 'ECONNABORTED') {
+      return res.status(408).json({ error: 'Request timeout' });
+    }
+    
+    if (error.response) {
+      console.error('AuthKey API error:', error.response.data);
+      return res.status(502).json({ 
+        error: 'AuthKey API error', 
+        details: error.response.data 
+      });
+    }
+    
+    res.status(500).json({ 
+      error: 'Internal server error', 
+      message: error.message 
+    });
+  }
+});
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err);
+  res.status(500).json({ error: 'Internal server error' });
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 AuthKey OTP Bridge running on port ${PORT}`);
-  console.log(`📡 Ready to transform POST → GET requests`);
+  console.log(`🚀 Railway SMS Bridge Server running on port ${PORT}`);
+  console.log(`📱 Ready to convert Supabase POST → AuthKey GET requests`);
 });
