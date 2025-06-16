@@ -27,26 +27,41 @@ app.get('/health', (req, res) => {
 // Main SMS hook endpoint
 app.post('/send-otp', async (req, res) => {
   try {
-    // 1. Validate webhook signature (Supabase way)
-    const signature = req.headers['x-supabase-signature'];
-    const webhookSecret = process.env.HOOK_SECRET;
+    // 1. Validate webhook signature (Standard Webhooks way)
+    const webhookId = req.headers['webhook-id'];
+    const webhookTimestamp = req.headers['webhook-timestamp'];
+    const webhookSignature = req.headers['webhook-signature'];
     
-    if (!signature) {
+    if (!webhookSignature) {
       console.error('Missing webhook signature');
       return res.status(401).json({ error: 'Unauthorized: Missing webhook signature' });
     }
     
-    // Verify the webhook signature using raw body
-    const body = req.body;
-    const expectedSignature = crypto
-      .createHmac('sha256', webhookSecret)
-      .update(body, 'utf8')
-      .digest('hex');
+    // Get the base64 secret (remove the v1,whsec_ prefix)
+    const hookSecret = process.env.HOOK_SECRET.replace('v1,whsec_', '');
+    const secretBuffer = Buffer.from(hookSecret, 'base64');
     
-    if (signature !== expectedSignature) {
+    // Create signed content: id.timestamp.body
+    const body = req.body.toString('utf8');
+    const signedContent = `${webhookId}.${webhookTimestamp}.${body}`;
+    
+    // Calculate expected signature
+    const expectedSignature = crypto
+      .createHmac('sha256', secretBuffer)
+      .update(signedContent, 'utf8')
+      .digest('base64');
+    
+    // Extract signature from header (format: "v1,signature")
+    const receivedSignature = webhookSignature.split(',')[1];
+    
+    if (receivedSignature !== expectedSignature) {
       console.error('Invalid webhook signature');
+      console.error('Expected:', expectedSignature);
+      console.error('Received:', receivedSignature);
       return res.status(401).json({ error: 'Unauthorized: Invalid webhook signature' });
     }
+    
+    console.log('Webhook signature verified successfully');
     
     // 2. Parse the JSON body
     const data = JSON.parse(body);
@@ -98,26 +113,16 @@ app.post('/send-otp', async (req, res) => {
     
     if (error.response) {
       console.error('AuthKey API error:', error.response.data);
-      return res.status(502).json({ 
-        error: 'AuthKey API error', 
-        details: error.response.data 
-      });
+      return res.status(502).json({ error: 'AuthKey API error', details: error.response.data });
     }
     
-    res.status(500).json({ 
-      error: 'Internal server error', 
-      message: error.message 
-    });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error('Unhandled error:', err);
-  res.status(500).json({ error: 'Internal server error' });
-});
-
 app.listen(PORT, () => {
-  console.log(`🚀 Railway SMS Bridge Server running on port ${PORT}`);
-  console.log(`📱 Ready to convert Supabase POST → AuthKey GET requests`);
+  console.log(`Server running on port ${PORT}`);
+  console.log('Environment variables loaded:');
+  console.log('- AUTHKEY:', process.env.AUTHKEY ? 'Set' : 'Missing');
+  console.log('- HOOK_SECRET:', process.env.HOOK_SECRET ? 'Set' : 'Missing');
 });
